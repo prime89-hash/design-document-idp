@@ -401,8 +401,7 @@ stages:
   - plan
   - security-scan
   - deploy-dev
-  - deploy-staging
-  - deploy-prod
+  - deploy-nonprod
 
 variables:
   TF_ROOT: infrastructure/
@@ -438,6 +437,23 @@ terraform-plan-dev:
     - changes:
         - infrastructure/**/*
 
+terraform-plan-nonprod:
+  stage: plan
+  image: hashicorp/terraform:$TF_VERSION
+  script:
+    - cd $TF_ROOT
+    - terraform init
+    - terraform plan -var-file="environments/nonprod.tfvars" -out=nonprod.tfplan
+  artifacts:
+    paths:
+      - $TF_ROOT/nonprod.tfplan
+    expire_in: 1 hour
+  environment:
+    name: nonprod
+  rules:
+    - changes:
+        - infrastructure/**/*
+
 security-scan:
   stage: security-scan
   image: bridgecrew/checkov:latest
@@ -456,9 +472,24 @@ deploy-dev:
   environment:
     name: dev
     url: https://dev-idp.evoke.com
-  when: manual
   dependencies:
     - terraform-plan-dev
+    - security-scan
+
+deploy-nonprod:
+  stage: deploy-nonprod
+  image: hashicorp/terraform:$TF_VERSION
+  script:
+    - cd $TF_ROOT
+    - terraform init
+    - terraform apply -auto-approve nonprod.tfplan
+  environment:
+    name: nonprod
+    url: https://nonprod-idp.evoke.com
+  when: manual
+  dependencies:
+    - deploy-dev
+    - terraform-plan-nonprod
     - security-scan
 ```
 
@@ -494,8 +525,7 @@ stages:
   - security-scan
   - deploy-dev
   - integration-test
-  - deploy-staging
-  - deploy-prod
+  - deploy-nonprod
 
 variables:
   PYTHON_VERSION: "3.11"
@@ -551,10 +581,15 @@ deploy-lambda-dev:
   stage: deploy-dev
   image: amazon/aws-cli:latest
   script:
-    - aws lambda update-function-code --function-name idp-classification-dev --zip-file fileb://lambda-package.zip
-    - aws lambda update-function-code --function-name idp-extraction-dev --zip-file fileb://lambda-package.zip
-    - aws lambda update-function-code --function-name idp-evaluation-dev --zip-file fileb://lambda-package.zip
-    - aws lambda wait function-updated --function-name idp-classification-dev
+    - aws lambda update-function-code --function-name idp-init-correlate-dev --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-document-validator-dev --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-bda-processor-dev --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-quality-evaluator-dev --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-output-generator-dev --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-cleanup-handler-dev --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-notification-handler-dev --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-error-handler-dev --zip-file fileb://lambda-package.zip
+    - aws lambda wait function-updated --function-name idp-init-correlate-dev
   environment:
     name: dev
   dependencies:
@@ -572,6 +607,27 @@ integration-tests:
   artifacts:
     reports:
       junit: tests/integration/results.xml
+
+deploy-lambda-nonprod:
+  stage: deploy-nonprod
+  image: amazon/aws-cli:latest
+  script:
+    - aws lambda update-function-code --function-name idp-init-correlate-nonprod --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-document-validator-nonprod --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-bda-processor-nonprod --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-quality-evaluator-nonprod --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-output-generator-nonprod --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-cleanup-handler-nonprod --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-notification-handler-nonprod --zip-file fileb://lambda-package.zip
+    - aws lambda update-function-code --function-name idp-error-handler-nonprod --zip-file fileb://lambda-package.zip
+    - aws lambda wait function-updated --function-name idp-init-correlate-nonprod
+  environment:
+    name: nonprod
+  when: manual
+  dependencies:
+    - integration-tests
+    - build-package
+    - security-scan
 ```
 
 ### 3. Prompt+Config Pipeline
@@ -593,8 +649,7 @@ stages:
   - test-synthetic
   - deploy-dev
   - evaluate-quality
-  - deploy-staging
-  - deploy-prod
+  - deploy-nonprod
 
 validate-config:
   stage: validate
@@ -648,6 +703,21 @@ evaluate-quality:
   artifacts:
     reports:
       junit: quality-results.xml
+
+deploy-config-nonprod:
+  stage: deploy-nonprod
+  image: amazon/aws-cli:latest
+  script:
+    - aws s3 sync config/ s3://idp-config-nonprod/config/ --delete
+    - aws s3 sync prompts/ s3://idp-config-nonprod/prompts/ --delete
+    - aws s3 sync blueprints/ s3://idp-config-nonprod/blueprints/ --delete
+    - aws lambda invoke --function-name idp-config-reload-nonprod response.json
+  environment:
+    name: nonprod
+  when: manual
+  dependencies:
+    - evaluate-quality
+    - validate-config
 ```### Pip
 eline Security and Best Practices
 
@@ -671,9 +741,9 @@ eline Security and Best Practices
 #### Deployment Strategy
 
 1. **Environment Promotion**:
-   - Dev → Staging → Production progression
+   - Dev → NonProd progression
    - Automated deployment to dev environment
-   - Manual approval gates for staging and production
+   - Manual approval gate for nonprod deployment
 
 2. **Rollback Strategy**:
    - Infrastructure: Terraform state rollback
@@ -1131,34 +1201,41 @@ The CI/CD strategy implements three separate pipelines to enable independent dep
 graph TB
     subgraph "Infrastructure Pipeline"
         A[Code Changes in /infrastructure] --> B[Terraform Validate]
-        B --> C[Terraform Plan]
+        B --> C[Terraform Plan Dev & NonProd]
         C --> D[Security Scan - Checkov/tfsec]
-        D --> E{Manual Approval}
-        E -->|Approved| F[Deploy to Dev]
-        F --> G[Deploy to Staging]
-        G --> H[Deploy to Production]
-        E -->|Rejected| I[Pipeline Stopped]
+        D --> E[Deploy to Dev - Auto]
+        E --> F{Manual Approval}
+        F -->|Approved| G[Deploy to NonProd]
+        F -->|Rejected| H[Pipeline Stopped]
     end
     
     subgraph "Components Deployed"
-        J[S3 Buckets]
-        K[DynamoDB Tables]
-        L[IAM Roles & Policies]
-        M[Lambda Infrastructure]
-        N[Step Functions]
-        O[API Gateway]
-        P[EventBridge Rules]
-        Q[CloudWatch Resources]
+        I[S3 Buckets]
+        J[DynamoDB Tables]
+        K[IAM Roles & Policies]
+        L[Lambda Infrastructure]
+        M[Step Functions]
+        N[API Gateway]
+        O[EventBridge Rules]
+        P[CloudWatch Resources]
     end
     
-    F --> J
-    F --> K
-    F --> L
-    F --> M
-    F --> N
-    F --> O
-    F --> P
-    F --> Q
+    E --> I
+    E --> J
+    E --> K
+    E --> L
+    E --> M
+    E --> N
+    E --> O
+    E --> P
+    G --> I
+    G --> J
+    G --> K
+    G --> L
+    G --> M
+    G --> N
+    G --> O
+    G --> P
 ```
 
 **Purpose**: Deploy and manage AWS infrastructure using Terraform
@@ -1190,31 +1267,42 @@ graph TB
         B --> C[Code Quality Checks]
         C --> D[Build ZIP Packages]
         D --> E[Security Scan - Safety/Bandit]
-        E --> F[Deploy to Dev]
+        E --> F[Deploy to Dev - Auto]
         F --> G[Integration Tests]
         G --> H{Quality Gates}
-        H -->|Pass| I[Deploy to Staging]
-        I --> J[Deploy to Production]
+        H -->|Pass| I{Manual Approval}
+        I -->|Approved| J[Deploy to NonProd]
         H -->|Fail| K[Pipeline Stopped]
+        I -->|Rejected| L[Pipeline Stopped]
     end
     
     subgraph "Lambda Functions Deployed"
-        L[Document Validator]
-        M[BDA Processor]
-        N[Quality Evaluator]
-        O[Output Generator]
-        P[Cleanup Handler]
-        Q[Notification Handler]
-        R[Error Handler]
+        M[INIT/Correlate Lambda]
+        N[Document Validator]
+        O[BDA Processor]
+        P[Quality Evaluator]
+        Q[Output Generator]
+        R[Cleanup Handler]
+        S[Notification Handler]
+        T[Error Handler]
     end
     
-    F --> L
     F --> M
     F --> N
     F --> O
     F --> P
     F --> Q
     F --> R
+    F --> S
+    F --> T
+    J --> M
+    J --> N
+    J --> O
+    J --> P
+    J --> Q
+    J --> R
+    J --> S
+    J --> T
 ```
 
 **Purpose**: Build, test, and deploy Lambda function code using ZIP packages
@@ -1241,29 +1329,36 @@ graph TB
         A[Changes in /config or /prompts] --> B[Validate Configuration]
         B --> C[Validate Prompts & Blueprints]
         C --> D[Synthetic Document Testing]
-        D --> E[Deploy Config to Dev]
+        D --> E[Deploy Config to Dev - Auto]
         E --> F[Quality Evaluation Tests]
         F --> G{Quality Threshold Met}
-        G -->|≥85% Accuracy| H[Deploy to Staging]
-        H --> I[Deploy to Production]
+        G -->|≥85% Accuracy| H{Manual Approval}
+        H -->|Approved| I[Deploy to NonProd]
         G -->|<85% Accuracy| J[Pipeline Stopped]
+        H -->|Rejected| K[Pipeline Stopped]
     end
     
     subgraph "Configuration Components"
-        K[BDA Blueprints]
-        L[Document Type Schemas]
-        M[Confidence Thresholds]
-        N[LLM Model Selection]
-        O[Processing Parameters]
-        P[Evaluation Prompts]
+        L[BDA Blueprints]
+        M[Document Type Schemas]
+        N[Confidence Thresholds]
+        O[LLM Model Selection]
+        P[Processing Parameters]
+        Q[Evaluation Prompts]
     end
     
-    E --> K
     E --> L
     E --> M
     E --> N
     E --> O
     E --> P
+    E --> Q
+    I --> L
+    I --> M
+    I --> N
+    I --> O
+    I --> P
+    I --> Q
 ```
 
 **Purpose**: Manage BDA blueprints, prompts, and system configuration
