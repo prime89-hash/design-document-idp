@@ -2,11 +2,90 @@
 
 ## Overview
 
-This document provides detailed specifications for all Lambda functions and Step Functions components used in the Intelligent Document Processing (IDP) system. The system uses 7 Lambda functions orchestrated by AWS Step Functions to process documents through a complete workflow.
+This document provides detailed specifications for all Lambda functions and Step Functions components used in the Intelligent Document Processing (IDP) system. The system uses 8 Lambda functions orchestrated by AWS Step Functions to process documents through a complete workflow.
 
 ## Lambda Functions Detailed Specifications
 
-### 1. Document Validator Lambda
+### 1. INIT/Correlate Lambda
+
+**Function Name**: `idp-init-correlate-{environment}`
+
+**Purpose**: Initializes and enriches the Step Functions execution context by correlating upload metadata (S3/SQS/EventBridge) with config and client records, generating a correlationId, validating lightweight IAM access, and preparing routing rules for downstream states.
+
+**Runtime Configuration**:
+- **Runtime**: Python 3.11
+- **Memory**: 256 MB
+- **Timeout**: 30 seconds
+- **Handler**: `init_correlate.handler`
+
+**Input Parameters**:
+```json
+{
+  "document_id": "uuid-string",
+  "s3_bucket": "bucket-name",
+  "s3_key": "document-path/filename.pdf",
+  "event_source": "s3|sqs|eventbridge",
+  "upload_timestamp": "2024-01-07T10:00:00Z",
+  "client_metadata": {
+    "client_id": "client-identifier",
+    "callback_url": "https://client.com/callback"
+  }
+}
+```
+
+**Initialization and Correlation Process**:
+1. **Generate Correlation ID**: Create unique correlation identifier for tracing
+2. **Load Client Configuration**: Retrieve client-specific processing rules and thresholds
+3. **Validate IAM Access**: Perform lightweight validation of required service permissions
+4. **Enrich Context**: Merge upload metadata with configuration and client records
+5. **Prepare Routing Rules**: Determine processing path based on document type hints and client rules
+6. **Initialize Tracking**: Create initial processing record in DynamoDB
+
+**Output**:
+```json
+{
+  "correlation_id": "corr-uuid-string",
+  "document_id": "uuid-string",
+  "enriched_context": {
+    "s3_bucket": "bucket-name",
+    "s3_key": "document-path/filename.pdf",
+    "client_config": {
+      "client_id": "client-identifier",
+      "callback_url": "https://client.com/callback",
+      "processing_rules": {
+        "confidence_threshold": 0.85,
+        "supported_document_types": ["national_id", "passport", "utility_bill"],
+        "language_hints": ["en", "de", "fr"]
+      }
+    },
+    "routing_rules": {
+      "processing_priority": "standard",
+      "timeout_seconds": 300,
+      "retry_attempts": 3,
+      "manual_review_threshold": 0.75
+    }
+  },
+  "validation_status": {
+    "iam_access_valid": true,
+    "client_authorized": true,
+    "configuration_loaded": true
+  },
+  "processing_metadata": {
+    "correlation_id": "corr-uuid-string",
+    "initialized_at": "2024-01-07T10:00:00Z",
+    "expected_completion_by": "2024-01-07T10:05:00Z"
+  }
+}
+```
+
+**IAM Permissions Required**:
+- `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` on metadata table
+- `s3:GetObject` on configuration bucket
+- `s3:GetObjectMetadata` on input bucket
+- `secretsmanager:GetSecretValue` for client configuration secrets
+- `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`
+
+### 2. Document Validator Lambda
 
 **Function Name**: `idp-document-validator-{environment}`
 
@@ -57,7 +136,60 @@ This document provides detailed specifications for all Lambda functions and Step
 - `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` on metadata table
 - `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`
 
-### 2. BDA Processor Lambda
+### 2. Document Validator Lambda
+
+**Function Name**: `idp-document-validator-{environment}`
+
+**Purpose**: Validates uploaded documents for format, size, and accessibility before processing
+
+**Runtime Configuration**:
+- **Runtime**: Python 3.11
+- **Memory**: 256 MB
+- **Timeout**: 60 seconds
+- **Handler**: `validator.handler`
+
+**Input Parameters**:
+```json
+{
+  "correlation_id": "corr-uuid-string",
+  "document_id": "uuid-string",
+  "s3_bucket": "bucket-name",
+  "s3_key": "document-path/filename.pdf",
+  "client_id": "client-identifier",
+  "callback_url": "https://client.com/callback"
+}
+```
+
+**Validation Checks**:
+- **File Format**: PDF, JPG, JPEG, TIFF only
+- **File Size**: Maximum 10MB
+- **File Accessibility**: S3 object exists and readable
+- **Metadata Completeness**: Required fields present
+- **File Integrity**: Basic file structure validation
+
+**Output**:
+```json
+{
+  "correlation_id": "corr-uuid-string",
+  "document_id": "uuid-string",
+  "validation_status": "success|failed",
+  "file_metadata": {
+    "size_bytes": 1024000,
+    "format": "pdf",
+    "pages": 2,
+    "created_date": "2024-01-07T10:00:00Z"
+  },
+  "validation_errors": ["array of error messages if any"]
+}
+```
+
+**IAM Permissions Required**:
+- `s3:GetObject` on input bucket
+- `s3:GetObjectMetadata` on input bucket
+- `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` on metadata table
+- `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`
+
+### 3. BDA Processor Lambda
 
 **Function Name**: `idp-bda-processor-{environment}`
 
@@ -128,7 +260,7 @@ This document provides detailed specifications for all Lambda functions and Step
 - `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem` on metadata table
 - `secretsmanager:GetSecretValue` for API credentials
 
-### 3. Quality Evaluator Lambda
+### 4. Quality Evaluator Lambda
 
 **Function Name**: `idp-quality-evaluator-{environment}`
 
@@ -197,7 +329,7 @@ This document provides detailed specifications for all Lambda functions and Step
 - `s3:GetObject` on config bucket for evaluation prompts
 - `dynamodb:UpdateItem` on metadata table
 
-### 4. Output Generator Lambda
+### 5. Output Generator Lambda
 
 **Function Name**: `idp-output-generator-{environment}`
 
@@ -261,7 +393,7 @@ This document provides detailed specifications for all Lambda functions and Step
 - `s3:PutObject` on output bucket
 - `dynamodb:UpdateItem` on metadata table
 
-### 5. Cleanup Handler Lambda
+### 6. Cleanup Handler Lambda
 
 **Function Name**: `idp-cleanup-handler-{environment}`
 
@@ -312,7 +444,7 @@ This document provides detailed specifications for all Lambda functions and Step
 - `s3:ListBucket` on input bucket
 - `dynamodb:UpdateItem` on metadata table
 
-### 6. Notification Handler Lambda
+### 7. Notification Handler Lambda
 
 **Function Name**: `idp-notification-handler-{environment}`
 
@@ -363,7 +495,7 @@ This document provides detailed specifications for all Lambda functions and Step
 - `s3:GetObject` on output bucket (for result URLs)
 - Network access for HTTP callbacks
 
-### 7. Error Handler Lambda
+### 8. Error Handler Lambda
 
 **Function Name**: `idp-error-handler-{environment}`
 
@@ -431,7 +563,38 @@ This document provides detailed specifications for all Lambda functions and Step
 
 ### State Machine Flow
 
-#### 1. ValidateDocument State
+#### 1. InitializeCorrelate State
+
+**Type**: Task (Lambda Invoke)
+
+**Configuration**:
+```json
+{
+  "Type": "Task",
+  "Resource": "arn:aws:states:::lambda:invoke",
+  "Parameters": {
+    "FunctionName": "idp-init-correlate-{env}",
+    "Payload": {
+      "document_id.$": "$.document_id",
+      "s3_bucket.$": "$.s3_bucket",
+      "s3_key.$": "$.s3_key",
+      "event_source.$": "$.event_source",
+      "upload_timestamp.$": "$.upload_timestamp",
+      "client_metadata.$": "$.client_metadata"
+    }
+  }
+}
+```
+
+**Retry Configuration**:
+- **Error Types**: Lambda.ServiceException, Lambda.AWSLambdaException
+- **Interval**: 1 second
+- **Max Attempts**: 3
+- **Backoff Rate**: 2.0
+
+**Next State**: ValidateDocument (on success) | HandleInitializationError (on failure)
+
+#### 2. ValidateDocument State
 
 **Type**: Task (Lambda Invoke)
 
@@ -443,9 +606,11 @@ This document provides detailed specifications for all Lambda functions and Step
   "Parameters": {
     "FunctionName": "idp-document-validator-{env}",
     "Payload": {
+      "correlation_id.$": "$.correlation_id",
       "document_id.$": "$.document_id",
       "s3_bucket.$": "$.s3_bucket",
-      "s3_key.$": "$.s3_key"
+      "s3_key.$": "$.s3_key",
+      "enriched_context.$": "$.enriched_context"
     }
   }
 }
@@ -459,7 +624,7 @@ This document provides detailed specifications for all Lambda functions and Step
 
 **Next State**: ProcessWithBDA (on success) | HandleValidationError (on failure)
 
-#### 2. ProcessWithBDA State
+#### 3. ProcessWithBDA State
 
 **Type**: Task (Lambda Invoke)
 
@@ -489,7 +654,39 @@ This document provides detailed specifications for all Lambda functions and Step
 
 **Next State**: CheckConfidenceThreshold
 
-#### 3. CheckConfidenceThreshold State
+#### 3. ProcessWithBDA State
+
+**Type**: Task (Lambda Invoke)
+
+**Configuration**:
+```json
+{
+  "Type": "Task",
+  "Resource": "arn:aws:states:::lambda:invoke",
+  "TimeoutSeconds": 300,
+  "Parameters": {
+    "FunctionName": "idp-bda-processor-{env}",
+    "Payload": {
+      "correlation_id.$": "$.correlation_id",
+      "document_id.$": "$.document_id",
+      "s3_bucket.$": "$.s3_bucket",
+      "s3_key.$": "$.s3_key",
+      "validation_result.$": "$.validation_result",
+      "enriched_context.$": "$.enriched_context"
+    }
+  }
+}
+```
+
+**Retry Configuration**:
+- **Error Types**: Lambda.ServiceException, Lambda.AWSLambdaException
+- **Interval**: 5 seconds
+- **Max Attempts**: 3
+- **Backoff Rate**: 2.0
+
+**Next State**: CheckConfidenceThreshold
+
+#### 4. CheckConfidenceThreshold State
 
 **Type**: Choice
 
@@ -512,7 +709,7 @@ This document provides detailed specifications for all Lambda functions and Step
 - If confidence ≥ 0.85: Continue to quality evaluation
 - If confidence < 0.85: Route to manual review queue
 
-#### 4. EvaluateQuality State
+#### 5. EvaluateQuality State
 
 **Type**: Task (Lambda Invoke)
 
@@ -539,7 +736,7 @@ This document provides detailed specifications for all Lambda functions and Step
 
 **Next State**: GenerateOutput
 
-#### 5. GenerateOutput State
+#### 6. GenerateOutput State
 
 **Type**: Task (Lambda Invoke)
 
@@ -561,7 +758,7 @@ This document provides detailed specifications for all Lambda functions and Step
 
 **Next State**: CleanupResources
 
-#### 6. CleanupResources State
+#### 7. CleanupResources State
 
 **Type**: Task (Lambda Invoke)
 
@@ -583,7 +780,7 @@ This document provides detailed specifications for all Lambda functions and Step
 
 **Next State**: NotifyCompletion
 
-#### 7. NotifyCompletion State
+#### 8. NotifyCompletion State
 
 **Type**: Task (Lambda Invoke)
 
@@ -605,7 +802,7 @@ This document provides detailed specifications for all Lambda functions and Step
 
 **End State**: true
 
-#### 8. SendToManualReview State
+#### 9. SendToManualReview State
 
 **Type**: Task (SQS Send Message)
 
@@ -627,7 +824,24 @@ This document provides detailed specifications for all Lambda functions and Step
 
 **Next State**: NotifyManualReview
 
-#### 9. Error Handling States
+#### 10. Error Handling States
+
+**HandleInitializationError State**:
+```json
+{
+  "Type": "Task",
+  "Resource": "arn:aws:states:::lambda:invoke",
+  "Parameters": {
+    "FunctionName": "idp-error-handler-{env}",
+    "Payload": {
+      "document_id.$": "$.document_id",
+      "error_type": "initialization_error",
+      "error_details.$": "$.error"
+    }
+  },
+  "Next": "NotifyError"
+}
+```
 
 **HandleValidationError State**:
 ```json
@@ -712,6 +926,7 @@ This document provides detailed specifications for all Lambda functions and Step
 
 **Attributes**:
 - `document_id`: Unique identifier
+- `correlation_id`: Correlation identifier for tracing across services
 - `client_id`: Client application identifier
 - `upload_timestamp`: ISO 8601 timestamp
 - `processing_status`: uploaded|processing|completed|failed|manual_review
@@ -719,6 +934,7 @@ This document provides detailed specifications for all Lambda functions and Step
 - `processing_results`: JSON object with BDA results
 - `quality_metrics`: JSON object with evaluation results
 - `callback_url`: Client notification endpoint
+- `enriched_context`: JSON object with client configuration and routing rules
 
 ## Monitoring and Observability
 
