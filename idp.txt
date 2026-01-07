@@ -1,0 +1,251 @@
+.3 Use Case 3: Intelligent Document Processing (IDP) 
+3.3.1 Use Case Summary 
+The use case is used to detect and extract required information from PII documents uploaded to s3 by client application. Accuracy of output is most critical for evoke and solution should take this into account. 
+Migration of solution aims to achieve 2 goals: 
+•	to classify and extract data from documents based on AWS tech stack 
+•	achieve at least current KPIs or get better. 
+Evoke is addressing below pain points through this migration and future planned phases for this use case: 
+•	Current solution utilizing Snowflake cortex is sub-standard and does not meet standards and requirements of evoke 
+•	Performance of the tool is below expectation, leading to more than 50 percent of the cases being sent for manual intervention either for classification or for extraction 
+•	Current solution in not easily extensible to handle new document extractions 
+•	High manual Effort required to train new documents 
+•	Very high cost 
+3.3.2. Use Case Scope 
+In Scope 
+•	Functional Scope: 
+o	Detect language of the documents. 
+o	Classify the input document by type with a confidence score. 
+o	Extract predefined fields from the document using AI with a confidence score. 
+o	Provide programmatic access to the service  
+	via uploading a document to AWS S3 Documents (unchanged from as-is) 
+	change configuration for IDP AI service AWS S3 Configuration 
+	consuming outputs of IDP AI service in AWS S3 Output 
+o	Log input and output metadata to enable traceability. 
+o	Enable configuration of IDP AI service. 
+o	Integration via S3 
+•	Documents in Scope 
+1.	Verifications: 
+Document 	Documents type 
+ID 	National ID Card 
+	Diver's License 
+	Passport (Both pages) 
+	Residence Permit (Front and Back) 
+	Citizenship Card 
+	Yoti Card 
+	Electoral Identity Card 
+POA 	Utility bill (Gas, Electric, satellite Television) 
+	Bank Statement 
+	Lease or Rental agreement 
+	Local authority council tax bill 
+	Payslip 
+	Mortgage statement 
+SOF 	Payslips 
+	Bank Statement 
+	Tax Declaration 
+PH/ID 	Photo holding ID 
+MFT 	CC Copy 
+	Bank Statement 
+	CC statement 
+2.	Legal Claims  
+Country 	Claim Type 	Documents type 
+UK 	Player Claims 	Claim Form 
+		Judgement 
+		Order 
+		Notice of Allocation 
+		Notice of Hearing 
+		Notice of Transfer 
+Malta 	Enforcement Claim 	Cedola 
+		Enforcement  
+Sweden 	Enforcement Claim 	Enforcement  
+Spain 	Player Claims 	Palpable Error- Court Claim 
+		Account Restriction- Claim 
+		Account Restriction- Mass Claim 
+		Account Restriction- Judgement 
+		Palpable Error- Claim Application 
+Germany  	  	Claim Application 
+		Cost Order 
+		Judgement 
+	Player Claims 	Prejudicial Claim Settlement 
+	  	Court Hearing 
+		Claim Application 
+		EPO Document (European Payment Orders)  
+		Payment reciept 
+•	Accepted file formats: pdf, jpg, jpeg, tiff 
+ 
+Out of Scope 
+•	UI development for users to upload documents 
+•	Integration to client applications 
+•	Deletion of document after processing will be As-Is. 
+•	Source: Documents originate from on-prem client applications or AWS-hosted client applications. 
+•	Upload: Files are uploaded via API Gateway using pre-signed URLs (secure upload mechanism). 
+•	Storage: Uploaded files land in Amazon S3. 
+•	Processing: A series of AWS services (Lambda, DynamoDB, OCR, etc.) process the files. 
+•	Automation: GitHub Actions + Terraform handle deployment and containerization. 
+ 
+Upload & API Layer 
+•	Direct Connect / AWS PrivateLink: Secure connectivity between on-prem and AWS. 
+•	API Gateway: Acts as the entry point for file upload requests.  
+o	Generates pre-signed URLs for S3 upload. 
+o	Writes metadata(id, presigned url, callback url) into DynamoDB for tracking. 
+ 
+Storage & Event Trigger 
+•	Amazon S3: Stores uploaded files. 
+•	EventBridge: Detects new S3 objects and triggers downstream processing. 
+ 
+Processing Pipeline (Step Function - Bedrock Data Automation) 
+•	Lambda Functions: Orchestrate steps: 
+o	Call Bedrock Data Automation. BDA has the prompts and scheme already in it.  
+o	BDA: Extract text from documents using blueprints. 
+o	BDA: Language Detection & Classification: Identify language and classify document type. 
+o	BDA: Schema Extraction: Parse structured data. 
+•	DynamoDB: Stores extracted metadata and processing status. 
+•	Config: Holds configuration for processing logic. 
+ 
+Config file would include:   
+Document metadata such as complexity, type, etc.,  
+Classification rules,  
+Accepted confidence score,  
+LLM model   
+ 
+ 
+Prompt and schema are part of BDA blueprints. 
+ 
+Output & Client Integration 
+•	Processed data is:  
+o	Sent to client applications via API Gateway or other integration. 
+ 
+CI/CD & Infrastructure 
+•	GitHub Actions: Automates build and deployment.  
+o	Detects changes in repo. 
+o	Builds Docker image. 
+o	Pushes image to ECR. 
+•	Terraform: Deploys infrastructure and containerized services. 
+•	Config files (e.g., main.tf, provider.tf, variables.tf) define infrastructure as code. 
+ 
+Security & Networking 
+•	HTTPS for secure communication. 
+•	NAT Gateway for outbound internet access from private subnets. 
+•	IAM roles for permissions (implied in architecture). 
+ 
+3.3.4 Data Management 
+Source Data-: 
+      Input Documents: Accepted formats are PDF, JPG/JPEG, TIFF. 
+      Storage Location: Documents are temporarily stored in AWS S3 for processing.  
+      Retention: Documents remain only for the duration required for processing and   acknowledgement. No long-term persistence in AWS services beyond this step.  
+ 
+Data Transformation: 
+     The system reads the document and perform task such as: 
+•	Text Extraction(e.g. OCR to read text from image or scanned files) 
+•	Language detection: To identify the document’s language. 
+•	Entity extraction: AI Model extract entities and schema from the document. 
+      After processing, the system creates a structured output in JSON Format(schema + entities) for further use and it is assume to be <256 KB. 
+ 
+Output Data: 
+        The processed information (structured JSON and classification result) is saved back to AWS S3 for downstream system to use.  
+         No sensitive data is kept beyond what is necessary for processing. 
+ 
+Data Removal and Cleanup: (As –Is & Unchanged) 
+     Document Deletion: 
+         UiPath deletes input documents immediately after successful processing. 
+         Error handling ensures cleanup during exception flow. 
+         Daily cleanup mechanism removes residual files from input folders. 
+   Logs: 
+        AWS logs retain performance metrics only for 1 year. 
+        UiPath logs retain execution and performance data only for 30 days. 
+        No extracted entities or sensitive data are stored in logs. 
+   Resistant AI: Does not persist any document; only returns classification output. 
+ 
+  
+3.3.5 Testing Approach 
+LLM driven evaluation will be used to test classification and extraction quality. In addition, classified and extracted information from synthetic document will be validated with evoke stakeholders. And evoke stakeholders will test on PII data in pre-prod environment. 
+Synthetic Data Validation: Ensure pipeline works correctly on controlled, representative data before real documents. 
+•	Steps:  
+o	Generate synthetic documents covering all expected variations (language, layout, field presence) in alignment with evoke stakeholders. 
+o	Validate OCR output (Textract/Comprehend) for completeness and accuracy. 
+o	Confirm classification logic assigns correct document type and confidence score. 
+o	Validate extracted fields against predefined schema and thresholds. 
+ 
+LLM-Driven Evaluation: Automate quality scoring for classification and extraction. 
+•	Method:  
+o	Use a Bedrock LLM (Claude, Haiku, Mistral etc.) to compare extracted JSON against ground truth. 
+o	Metrics:  
+	Classification Accuracy: Correct document type vs. expected. 
+	Field-Level Precision/Recall: For mandatory and optional fields. 
+	Confidence Threshold Check: Ensure model confidence ≥ configured threshold. 
+o	Output:  
+	Evaluation report with pass/fail per document and aggregate quality score. 
+	Flag discrepancies for manual review. 
+ 
+Stakeholder Validation: Align extracted data with business expectations. 
+•	Steps:  
+o	Share evaluation results and sample extracted outputs with Evoke stakeholders. 
+o	Validate:  
+	Correctness of extracted fields. 
+	Compliance with document-type rules and thresholds. 
+o	Capture feedback for prompt tuning and parameter adjustments. 
+ 
+Configurability Testing: Ensure document-type level parameters are fully configurable and applied correctly. 
+•	Parameters to Test:  
+o	Schema & Fields: Validate dynamic addition/removal of fields. 
+o	Prompt/Instruction Changes: Update prompt in S3 → redeploy via CI/CD → confirm new behavior. 
+o	Thresholds: Adjust confidence threshold and verify classification/extraction respects new values. 
+o	Service/Model Selection: Switch between e.g. Textract, Comprehend and Bedrock LLM → confirm pipeline adapts. 
+o	Language Hints: Provide language hints in config → verify improved detection accuracy. 
+•	Method:  
+o	Modify configuration JSON in repo → trigger CI/CD → upload test document → validate pipeline behavior. 
+o	Confirm lineage logs capture updated configuration version. 
+ 
+Language Detection Testing: Validate multilingual support and detection accuracy. 
+•	Steps:  
+o	Prepare synthetic documents in multiple languages (English, EU languages). 
+o	Validate:  
+	Correct language detection by Textract/Comprehend or LLM. 
+	Classification and extraction accuracy for each language. 
+	Prompt adaptation for language-specific instructions. 
+•	Metrics:  
+o	Language detection accuracy ≥ 95%. 
+o	Extraction accuracy consistent across languages. 
+ 
+ 
+Functional & Integration Testing: 
+•	Trigger Validation:  
+o	Upload document to S3 → Step Function starts → pipeline completes. 
+•	Workflow Checks:  
+o	EventBridge triggers correctly. 
+o	DLQ remains empty; retry logic works for transient failures. 
+•	Output Handling:  
+o	Processed JSON written to correct S3 prefix. 
+o	Original document deleted post-processing. 
+3.3.6 Definition of Done 
+•	Functional: 
+o	End-to-end pipeline works in a non-prod environment 
+o	Configurable document-type parameters implemented and tested for classification and extractions 
+o	Synthetic data processed successfully with acceptable extraction accuracy and evaluation score 
+•	Evaluation and testing: 
+o	LLM based evaluation and confidence score for extracted information available 
+o	Tested by evoke on at least one document type 
+•	Security: Secrets stored in AWS Secrets Manager 
+•	CI/CD through GitLab pipeline setup and tested 
+•	Observability: Logs integrated with New Relic; alerts for failures configured 
+ 
+3.3.7. Assumptions & Dependencies 
+•	AWS/Evoke will create all Infrastructure and setup.  
+•	Accenture is responsible only for the application migration/development and testing  
+•	Synthetic data will be provided by Evoke 
+•	Synthetic Data will be used for development and testing by Accenture team  
+•	Synthetic data (that will be aligned with evoke) will represent real-world complexity for the document types in scope 
+•	Evoke will test the solution in non-prod and production environment with real documents that may have PII data 
+•	Input document quality is always assumed to be good and client applications (upstream systems) are required to ensure the quality 
+•	The document uploaded to S3 is not fraudulent and it is in a fully readable quality. Document quality is already checked by upstream systems. 
+•	Authentication/authorization via AWS IAM and service accounts 
+•	Secrets management via AWS Secrets Manager 
+•	Any LLM model on bedrock can be used if it complies with EU regulations. AWS Bedrock models (Claude, Mistral, etc.) are available and meet EU compliance 
+•	There are no Machine Learning models used in the solution 
+ 
+Dependencies  
+•	Landing zone, tooling, security, end points to be setup by Evoke 
+•	Synthetic data to be used needs to be approved by evoke to ensure enough complete 
+•	Platform Accesses 
+•	IAM, Service account setup for accessing data 
+•	New Relic integrations 
+•	Repo creation within GitLab   
