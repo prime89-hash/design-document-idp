@@ -12,9 +12,17 @@ The Intelligent Document Processing (IDP) system is a cloud-native solution buil
 - **Security by Design**: Implements comprehensive security controls and data protection
 - **Observability**: Built-in monitoring, logging, and alerting capabilities
 
+### Business Benefits
+
+- **Improved Accuracy**: Target >95% classification accuracy and >90% field extraction accuracy
+- **Reduced Manual Intervention**: Decrease manual review cases from 50% to <15%
+- **Cost Optimization**: Serverless architecture reduces operational costs by 40-60%
+- **Scalability**: Automatic scaling to handle 100-500 documents per minute
+- **Extensibility**: Easy addition of new document types without code changes
+
 ## Architecture
 
-### High-Level Architecture Components
+### High-Level System Architecture
 
 ```mermaid
 graph TB
@@ -32,10 +40,15 @@ graph TB
     subgraph "Processing Layer"
         EB[EventBridge]
         SF[Step Functions]
-        Lambda1[Classification Lambda]
-        Lambda2[Extraction Lambda]
-        Lambda3[Evaluation Lambda]
-        BDA[Bedrock Data Automation]
+        INIT[INIT/Correlate]
+        VAL[Document Validator]
+        BDA[BDA Processor]
+        EVAL[Quality Evaluator]
+        OUT[Output Generator]
+        CLEAN[Cleanup Handler]
+        NOTIFY[Notification Handler]
+        ERR[Error Handler]
+        BEDROCK[AWS Bedrock]
     end
     
     subgraph "Storage Layer"
@@ -58,112 +71,347 @@ graph TB
     APIG --> DDB
     S3Input --> EB
     EB --> SF
-    SF --> Lambda1
-    SF --> Lambda2
-    SF --> Lambda3
-    Lambda1 --> BDA
-    Lambda2 --> BDA
-    Lambda3 --> BDA
-    Lambda1 --> DDB
-    Lambda2 --> DDB
-    Lambda3 --> DDB
-    Lambda1 --> S3Config
-    Lambda2 --> S3Config
-    Lambda3 --> S3Config
-    Lambda2 --> S3Output
-    Lambda3 --> S3Output
+    SF --> INIT
+    INIT --> VAL
+    VAL --> BDA
+    BDA --> EVAL
+    EVAL --> OUT
+    OUT --> CLEAN
+    CLEAN --> NOTIFY
+    SF --> ERR
+    BDA --> BEDROCK
+    EVAL --> BEDROCK
+    SF --> DDB
+    SF --> S3Config
+    SF --> S3Output
     SF --> CW
     CW --> NR
     CW --> SNS
-    Lambda1 --> SM
-    Lambda2 --> SM
-    Lambda3 --> SM
-```
-
-### Network Architecture
+    SF --> SM
+```### 
+Network Architecture
 
 **Serverless-First Approach**: 
-- **No VPC Required**: Lambda functions run in AWS-managed VPC by default
-- **VPC Endpoints**: Optional for enhanced security and cost optimization
-- **API Gateway**: Public endpoint with security controls (API keys, rate limiting)
-- **Service-to-Service**: Direct AWS service integration without custom networking
+- **No VPC Required**: Lambda functions run in AWS-managed secure environment
+- **API Gateway**: Public endpoint with comprehensive security controls
+- **Service Integration**: Direct AWS service communication via secure backbone
+- **Cost Benefits**: No NAT Gateway or VPC endpoint fees
+- **Performance**: Faster cold start times and automatic scaling
 
-**When VPC Might Be Needed**:
-- Integration with on-premises databases (not applicable here)
-- Custom network security requirements beyond AWS defaults
-- Compliance requirements for network isolation
+## System Components
 
-**Current Design Benefits**:
-- Reduced complexity and management overhead
-- Lower costs (no NAT Gateway, VPC endpoints fees)
-- Faster cold start times for Lambda functions
-- Automatic scaling without network constraints##
- Components and Interfaces
+### 1. Document Upload and API Layer
 
-### 1. API Gateway Component
+**API Gateway Component**
+- **Purpose**: Secure entry point for document uploads and status checking
+- **Key Endpoints**:
+  - `POST /upload` - Generate pre-signed URLs for secure document upload
+  - `GET /status/{documentId}` - Check processing status and results
+  - `POST /callback` - Receive processing completion notifications
 
-**Purpose**: Secure entry point for document uploads and metadata management
+**Security Features**:
+- API Key authentication for client applications
+- Rate limiting: 100 requests per minute per client
+- HTTPS enforcement for all communications
+- Comprehensive audit logging
 
-**Key Interfaces**:
-- `POST /upload` - Generate pre-signed URLs for document upload
-- `GET /status/{documentId}` - Check processing status
-- `POST /callback` - Receive processing completion notifications
+### 2. Document Processing Pipeline
 
-**Implementation Details**:
+**Step Functions Orchestration**
+The system uses AWS Step Functions to orchestrate 8 Lambda functions in a sequential workflow:
+
+1. **INIT/Correlate Lambda**: Initializes processing context and generates correlation IDs
+2. **Document Validator Lambda**: Validates file format, size, and accessibility
+3. **BDA Processor Lambda**: Handles Bedrock Data Automation for classification and extraction
+4. **Quality Evaluator Lambda**: Performs LLM-based quality assessment
+5. **Output Generator Lambda**: Creates structured JSON output
+6. **Cleanup Handler Lambda**: Manages document lifecycle and cleanup
+7. **Notification Handler Lambda**: Sends completion notifications to clients
+8. **Error Handler Lambda**: Processes errors and manages retry logic
+
+**Processing Flow**:
+```mermaid
+graph LR
+    A[Document Upload] --> B[INIT/Correlate]
+    B --> C[Validate Document]
+    C --> D[BDA Processing]
+    D --> E{Confidence Check}
+    E -->|≥85%| F[Quality Evaluation]
+    E -->|<85%| G[Manual Review Queue]
+    F --> H[Generate Output]
+    H --> I[Cleanup Resources]
+    I --> J[Send Notification]
+    G --> K[Manual Review Process]
+```### 
+3. Bedrock Data Automation (BDA) Integration
+
+**Core AI Processing Engine**
+- **Technology**: AWS Bedrock Data Automation with custom blueprints
+- **Capabilities**: 
+  - Language detection with 95%+ accuracy
+  - Document classification across all supported types
+  - Field extraction with configurable schemas
+  - Confidence scoring for all operations
+
+**Supported Document Types**:
+- **ID Documents**: National ID, Driver's License, Passport, Residence Permit, Citizenship Card
+- **Proof of Address**: Utility bills, Bank Statements, Lease agreements, Council tax bills
+- **Source of Funds**: Payslips, Bank Statements, Tax Declarations
+- **Legal Claims**: Court documents across UK, Malta, Sweden, Spain, Germany jurisdictions
+
+### 4. Configuration Management System
+
+**Dynamic Configuration**
+- **Storage**: S3-based configuration with versioning
+- **Structure**: Document-type specific parameters and global settings
+- **Deployment**: Automated configuration updates via CI/CD pipeline
+- **Rollback**: Automatic rollback on validation failures
+
+**Configuration Parameters**:
+- Classification confidence thresholds per document type
+- Field extraction schemas (required and optional fields)
+- LLM model selection for different processing tasks
+- Language hints and processing timeouts
+- Quality evaluation criteria
+
+### 5. Quality Assurance and Evaluation
+
+**Automated Quality Assessment**
+- **LLM Evaluation**: Uses Claude Haiku for automated quality scoring
+- **Metrics Tracked**:
+  - Classification accuracy (target: ≥95%)
+  - Field-level precision and recall (target: ≥90%)
+  - Confidence threshold compliance
+  - Processing time and throughput
+
+**Quality Gates**:
+- Minimum 85% confidence for automatic processing
+- Documents below threshold routed to manual review
+- Comprehensive error handling and retry mechanisms
+- Dead letter queue for failed processing items## Da
+ta Models and Storage
+
+### Document Metadata Model
 ```json
 {
-  "upload_endpoint": {
-    "method": "POST",
-    "path": "/upload",
-    "request_body": {
-      "document_type": "string",
-      "callback_url": "string",
-      "metadata": "object"
-    },
-    "response": {
-      "document_id": "string",
-      "presigned_url": "string",
-      "expires_at": "timestamp"
-    }
+  "document_id": "uuid",
+  "correlation_id": "correlation-uuid",
+  "upload_timestamp": "iso8601",
+  "client_id": "string",
+  "document_type": "string",
+  "file_format": "pdf|jpg|jpeg|tiff",
+  "file_size_bytes": "integer",
+  "callback_url": "string",
+  "processing_status": "uploaded|processing|completed|failed|manual_review",
+  "language_detected": "string",
+  "language_confidence": "float",
+  "classification_result": {
+    "document_type": "string",
+    "confidence_score": "float",
+    "classification_timestamp": "iso8601"
+  },
+  "extraction_result": {
+    "extracted_fields": "object",
+    "confidence_scores": "object",
+    "extraction_timestamp": "iso8601"
+  },
+  "evaluation_result": {
+    "quality_score": "float",
+    "accuracy_metrics": "object",
+    "evaluation_timestamp": "iso8601"
+  },
+  "enriched_context": {
+    "client_config": "object",
+    "routing_rules": "object"
   }
 }
 ```
 
-**Security Controls**:
-- API Key authentication for client applications
-- Rate limiting: 100 requests per minute per client
-- Request/response logging for audit trails
-- CORS configuration for web-based clients
+### Processing Result Output
+```json
+{
+  "document_id": "uuid",
+  "processing_metadata": {
+    "processed_at": "iso8601",
+    "processing_duration_total_ms": "integer",
+    "system_version": "string"
+  },
+  "document_classification": {
+    "type": "string",
+    "confidence": "float",
+    "language": "string"
+  },
+  "extracted_data": {
+    "field_name": "field_value"
+  },
+  "confidence_scores": {
+    "field_name": "confidence_float"
+  },
+  "quality_assessment": {
+    "overall_score": "float",
+    "meets_threshold": "boolean",
+    "manual_review_required": "boolean"
+  }
+}
+```#
+# Error Handling and Resilience
 
-### 2. Document Processing Engine
+### Error Categories and Responses
 
-**Purpose**: Core component for document classification and extraction
+**Upload Errors**
+- Invalid file format: Return 400 with supported formats list
+- File size exceeded: Return 413 with size limits
+- Authentication failure: Return 401 with error details
 
-**Sub-Components**:
+**Processing Errors**
+- BDA API failure: Automatic retry with exponential backoff
+- Classification below threshold: Route to manual review queue
+- Processing timeout: Increase timeout and retry once
+- Configuration error: Use fallback configuration and alert administrators
 
-#### 2.1 Language Detection Service
-- **Technology**: Bedrock Data Automation with language detection blueprints
-- **Input**: Raw document uploaded to S3
-- **Output**: Language code with confidence score via BDA
-- **Threshold**: Minimum 95% confidence for language detection
+**Resilience Patterns**
+- **Circuit Breaker**: 50% failure rate triggers circuit open for 2 minutes
+- **Retry Logic**: 3 attempts with exponential backoff for transient failures
+- **Dead Letter Queue**: Failed items after max retries for investigation
+- **Health Checks**: Synthetic document processing tests for system validation
 
-#### 2.2 Document Classification Service
-- **Technology**: Bedrock Data Automation with classification blueprints
-- **Input**: Document and detected language from BDA
-- **Output**: Document type classification with confidence score
-- **Supported Types**: ID, POA, SOF, PH/ID, MFT, Legal Claims
+## Security and Compliance
 
-#### 2.3 Field Extraction Service
-- **Technology**: Bedrock Data Automation with extraction blueprints and schemas
-- **Input**: Classified document and extraction schema
-- **Output**: Structured JSON with extracted fields and confidence scores
-- **Schema Management**: BDA blueprints contain predefined schemas for each document type
+### Data Protection
+- **Encryption**: All data encrypted at rest (S3, DynamoDB) and in transit (HTTPS/TLS)
+- **Access Control**: IAM roles with least privilege principle
+- **Data Lifecycle**: Automatic document deletion after successful processing
+- **Audit Logging**: Comprehensive logging for compliance and troubleshooting
 
-### 3. Configuration Management System
+### Network Security
+- **API Security**: API Gateway with authentication, rate limiting, and CORS
+- **Service Communication**: Secure AWS backbone for service-to-service communication
+- **Secrets Management**: AWS Secrets Manager for secure credential storage
+- **Monitoring**: Real-time security monitoring and alerting
 
-**Purpose**: Dynamic configuration for document processing parameters
+## Performance and Scalability
 
-**Configuration Structure**:
+### Performance Targets
+- **Processing Time**: ≤30 seconds per document (average)
+- **Throughput**: 100 documents/minute (normal), 500 documents/minute (peak)
+- **Availability**: 99.9% uptime with automatic failover
+- **Accuracy**: ≥95% classification, ≥90% field extraction
+
+### Scalability Features
+- **Automatic Scaling**: Lambda functions scale automatically based on demand
+- **Concurrent Processing**: Multiple documents processed simultaneously
+- **Resource Optimization**: Memory and timeout settings optimized per function
+- **Cost Efficiency**: Pay-per-use model with no idle resource costs## Mo
+nitoring and Observability
+
+### Monitoring Strategy
+- **CloudWatch Integration**: Native AWS monitoring for all services
+- **New Relic Integration**: Advanced observability and performance monitoring
+- **Custom Metrics**: Business-specific metrics for document processing
+- **Real-time Dashboards**: Processing status, quality metrics, and error analysis
+
+### Alerting Configuration
+- **Critical Alerts**: Processing failure rate >5%, DLQ messages >0
+- **Warning Alerts**: Manual review queue depth >10, processing time >60s
+- **Business Metrics**: Classification accuracy drops, throughput anomalies
+- **Notification Channels**: Email, Slack, and SMS for different severity levels
+
+## Testing and Quality Assurance
+
+### Testing Strategy
+- **Synthetic Data Testing**: Controlled test data for all document types
+- **LLM-Driven Evaluation**: Automated quality assessment using AI
+- **Performance Testing**: Load testing up to 500 documents/minute
+- **Integration Testing**: End-to-end workflow validation
+
+### Quality Thresholds
+- Overall quality score ≥0.85
+- Classification accuracy ≥0.95
+- Field-level precision ≥0.90
+- Field-level recall ≥0.85
+
+## Application Flow Diagrams
+
+### Document Upload Flow
+```mermaid
+sequenceDiagram
+    participant Client as Client Application
+    participant API as API Gateway
+    participant Lambda as Upload Lambda
+    participant S3 as S3 Input Bucket
+    participant DDB as DynamoDB
+    participant EB as EventBridge
+    participant SF as Step Functions
+    
+    Client->>API: POST /upload (metadata)
+    API->>Lambda: Invoke upload handler
+    Lambda->>DDB: Store document metadata
+    Lambda->>S3: Generate pre-signed URL
+    Lambda->>API: Return pre-signed URL
+    API->>Client: Return upload URL
+    Client->>S3: Upload document using pre-signed URL
+    S3->>EB: Trigger Object Created event
+    EB->>SF: Start workflow execution
+```### BDA P
+rocessing Flow
+```mermaid
+sequenceDiagram
+    participant SF as Step Functions
+    participant INIT as INIT/Correlate
+    participant VAL as Document Validator
+    participant BDA as BDA Processor
+    participant Bedrock as AWS Bedrock
+    participant Config as Config S3
+    participant DDB as DynamoDB
+    
+    SF->>INIT: Initialize processing context
+    INIT->>DDB: Generate correlation ID and enrich context
+    INIT->>SF: Return enriched context
+    SF->>VAL: Validate document
+    VAL->>S3: Check file format/size
+    VAL->>DDB: Update status: validating
+    VAL->>SF: Return validation result
+    SF->>BDA: Process with BDA
+    BDA->>Config: Load configuration/blueprints
+    BDA->>Bedrock: Call BDA API
+    Bedrock->>BDA: Return processing results
+    BDA->>DDB: Update processing results
+    BDA->>SF: Return BDA results
+```
+
+### Quality Evaluation and Output Flow
+```mermaid
+sequenceDiagram
+    participant SF as Step Functions
+    participant QE as Quality Evaluator
+    participant OG as Output Generator
+    participant CH as Cleanup Handler
+    participant NH as Notification Handler
+    participant S3Out as S3 Output
+    participant Client as Client Application
+    
+    SF->>QE: Evaluate quality
+    QE->>Bedrock: LLM evaluation call
+    QE->>SF: Return quality scores
+    SF->>OG: Generate output
+    OG->>S3Out: Store final JSON
+    OG->>SF: Output generated
+    SF->>CH: Cleanup resources
+    CH->>S3: Delete input document
+    CH->>SF: Cleanup complete
+    SF->>NH: Send notification
+    NH->>Client: Callback notification
+```
+
+## Configuration Management
+
+### BDA Blueprint Structure
+- **Document Types**: National ID, Driver's License, Passport, Utility Bills, Bank Statements, Legal Claims
+- **Processing Models**: Claude Sonnet for classification/extraction, Haiku for evaluation
+- **Configuration Management**: Dynamic blueprint loading from S3
+- **Quality Thresholds**: Configurable confidence scores per document type
+
+### Configuration Parameters Example
 ```json
 {
   "document_types": {
@@ -186,1322 +434,4 @@ graph TB
 }
 ```
 
-**Configuration Deployment**:
-- Stored in S3 with versioning enabled
-- Lambda function validates configuration changes
-- Automatic rollback on validation failures
-- Configuration change triggers pipeline deployment
-
-### 4. Step Functions Workflow
-
-**Purpose**: Orchestrate document processing pipeline with comprehensive error handling and monitoring
-
-#### Step Functions Workflow States
-
-**Processing Flow**:
-1. **Document Validation** - Verify file format, size, and accessibility
-2. **BDA Processing** - Single call to Bedrock Data Automation for complete document processing
-3. **Confidence Check** - Evaluate if results meet quality thresholds
-4. **Quality Evaluation** - LLM-based assessment of extraction accuracy
-5. **Output Generation** - Create structured JSON output
-6. **Resource Cleanup** - Remove temporary files and update status
-7. **Notification** - Inform client application of completion
-
-**Error Handling**:
-- **Automatic Retry** - 3 attempts with exponential backoff for transient failures
-- **Manual Review Queue** - Low confidence results routed for human review
-- **Dead Letter Queue** - Failed processing items for investigation
-- **Error Notifications** - Client applications notified of processing failures
-
-**Quality Gates**:
-- **Confidence Threshold** - Minimum 85% confidence for automatic processing
-- **Format Validation** - Only PDF, JPG, JPEG, TIFF files accepted
-- **Size Limits** - Maximum 10MB file size
-- **Processing Timeout** - 5-minute maximum processing time
-
-### 5. Evaluation Engine
-
-**Purpose**: Automated quality assessment using LLM evaluation
-
-**Evaluation Metrics**:
-- **Classification Accuracy**: Percentage of correctly classified documents
-- **Field Precision**: Accuracy of extracted field values
-- **Field Recall**: Completeness of required field extraction
-- **Confidence Threshold Compliance**: Adherence to minimum confidence scores
-
-**LLM Evaluation Prompt Template**:
-```
-Evaluate the following document extraction results:
-
-Ground Truth: {ground_truth_json}
-Extracted Data: {extracted_json}
-Document Type: {document_type}
-
-Provide evaluation scores for:
-1. Classification accuracy (0-1)
-2. Field-level precision (0-1)
-3. Field-level recall (0-1)
-4. Overall quality score (0-1)
-
-Return results in JSON format with detailed explanations.
-```## D
-ata Models
-
-### 1. Document Metadata Model
-
-```json
-{
-  "document_id": "uuid",
-  "upload_timestamp": "iso8601",
-  "client_id": "string",
-  "document_type": "string",
-  "file_format": "pdf|jpg|jpeg|tiff",
-  "file_size_bytes": "integer",
-  "callback_url": "string",
-  "processing_status": "uploaded|processing|completed|failed",
-  "language_detected": "string",
-  "language_confidence": "float",
-  "classification_result": {
-    "document_type": "string",
-    "confidence_score": "float",
-    "classification_timestamp": "iso8601"
-  },
-  "extraction_result": {
-    "extracted_fields": "object",
-    "confidence_scores": "object",
-    "extraction_timestamp": "iso8601"
-  },
-  "evaluation_result": {
-    "quality_score": "float",
-    "accuracy_metrics": "object",
-    "evaluation_timestamp": "iso8601"
-  }
-}
-```
-
-### 2. Configuration Schema Model
-
-```json
-{
-  "version": "string",
-  "last_updated": "iso8601",
-  "document_types": {
-    "{document_type}": {
-      "classification_threshold": "float",
-      "extraction_schema": {
-        "required_fields": ["array"],
-        "optional_fields": ["array"],
-        "field_validations": "object"
-      },
-      "llm_model": "string",
-      "language_hints": ["array"],
-      "complexity_level": "low|medium|high",
-      "processing_timeout": "integer"
-    }
-  },
-  "global_settings": {
-    "max_file_size_mb": "integer",
-    "supported_formats": ["array"],
-    "retention_days": "integer"
-  }
-}
-```
-
-### 3. Processing Result Model
-
-```json
-{
-  "document_id": "uuid",
-  "processing_id": "uuid",
-  "status": "success|failure|partial",
-  "processing_duration_ms": "integer",
-  "extracted_data": {
-    "document_type": "string",
-    "language": "string",
-    "fields": {
-      "{field_name}": {
-        "value": "any",
-        "confidence": "float",
-        "extraction_method": "string"
-      }
-    }
-  },
-  "quality_metrics": {
-    "overall_score": "float",
-    "field_accuracy": "object",
-    "confidence_distribution": "object"
-  },
-  "errors": ["array"],
-  "warnings": ["array"]
-}
-```
-
-## Error Handling
-
-### Error Categories and Responses
-
-1. **Upload Errors**
-   - Invalid file format: Return 400 with supported formats
-   - File size exceeded: Return 413 with size limits
-   - Authentication failure: Return 401 with error details
-
-2. **Processing Errors**
-   - BDA API failure: Retry with exponential backoff
-   - Classification below threshold: Route to manual review queue
-   - Processing timeout: Increase timeout and retry once
-   - Blueprint configuration error: Use fallback blueprint
-
-3. **Configuration Errors**
-   - Invalid schema: Rollback to previous version
-   - Missing model: Use fallback model configuration
-   - Validation failure: Block deployment and alert administrators
-
-### Dead Letter Queue Strategy
-
-- **Primary Queue**: Standard processing queue with 3 retry attempts
-- **DLQ Configuration**: Messages moved after 3 failures
-- **DLQ Processing**: Manual review process with admin notifications
-- **Monitoring**: CloudWatch alarms for DLQ message count
-
-### Circuit Breaker Pattern
-
-- **Failure Threshold**: 50% failure rate over 5 minutes
-- **Circuit Open Duration**: 2 minutes
-- **Health Check**: Synthetic document processing test
-- **Recovery**: Gradual traffic increase after circuit closes## 
-GitLab CI/CD Pipeline Strategy
-
-### Pipeline Architecture Overview
-
-The CI/CD strategy implements three separate pipelines to enable independent deployment cycles and reduce blast radius of changes:
-
-1. **Infrastructure Pipeline** - Manages AWS resources and networking
-2. **Application Pipeline** - Handles Lambda functions and application code
-3. **Prompt+Config Pipeline** - Manages BDA blueprints and configuration
-
-### 1. Infrastructure Pipeline
-
-**Purpose**: Deploy and manage AWS infrastructure using Terraform
-
-**Trigger Conditions**:
-- Changes to `infrastructure/` directory
-- Changes to `*.tf` files
-- Manual pipeline execution
-- Scheduled weekly validation runs
-
-**Pipeline Stages**:
-
-```yaml
-# .gitlab-ci.yml (Infrastructure)
-stages:
-  - validate
-  - plan
-  - security-scan
-  - deploy-dev
-  - deploy-staging
-  - deploy-prod
-
-variables:
-  TF_ROOT: infrastructure/
-  TF_VERSION: "1.6.0"
-
-terraform-validate:
-  stage: validate
-  image: hashicorp/terraform:$TF_VERSION
-  script:
-    - cd $TF_ROOT
-    - terraform init -backend=false
-    - terraform validate
-    - terraform fmt -check
-  rules:
-    - changes:
-        - infrastructure/**/*
-        - "*.tf"
-
-terraform-plan-dev:
-  stage: plan
-  image: hashicorp/terraform:$TF_VERSION
-  script:
-    - cd $TF_ROOT
-    - terraform init
-    - terraform plan -var-file="environments/dev.tfvars" -out=dev.tfplan
-  artifacts:
-    paths:
-      - $TF_ROOT/dev.tfplan
-    expire_in: 1 hour
-  environment:
-    name: dev
-  rules:
-    - changes:
-        - infrastructure/**/*
-
-security-scan:
-  stage: security-scan
-  image: bridgecrew/checkov:latest
-  script:
-    - checkov -d infrastructure/ --framework terraform
-    - tfsec infrastructure/
-  allow_failure: false
-
-deploy-dev:
-  stage: deploy-dev
-  image: hashicorp/terraform:$TF_VERSION
-  script:
-    - cd $TF_ROOT
-    - terraform init
-    - terraform apply -auto-approve dev.tfplan
-  environment:
-    name: dev
-    url: https://dev-idp.evoke.com
-  when: manual
-  dependencies:
-    - terraform-plan-dev
-    - security-scan
-```
-
-**Infrastructure Components Managed**:
-- API Gateway with security policies and rate limiting
-- Lambda functions with appropriate IAM roles
-- S3 buckets with versioning and encryption
-- DynamoDB tables with backup configuration
-- IAM roles and policies with least privilege
-- EventBridge rules and targets
-- Step Functions state machines
-- CloudWatch log groups and alarms
-- New Relic integration resources
-- Secrets Manager for secure credential storage
-
-### 2. Application Pipeline
-
-**Purpose**: Build, test, and deploy Lambda function code and container images
-
-**Trigger Conditions**:
-- Changes to `src/` directory
-- Changes to `requirements.txt` or `package.json`
-- Changes to Dockerfile
-- Manual pipeline execution
-
-**Pipeline Stages**:
-
-```yaml
-# .gitlab-ci.yml (Application)
-stages:
-  - test
-  - build
-  - security-scan
-  - deploy-dev
-  - integration-test
-  - deploy-staging
-  - deploy-prod
-
-variables:
-  PYTHON_VERSION: "3.11"
-  AWS_DEFAULT_REGION: $AWS_REGION
-
-unit-tests:
-  stage: test
-  image: python:$PYTHON_VERSION
-  script:
-    - pip install -r requirements-dev.txt
-    - pytest tests/unit/ --cov=src/ --cov-report=xml
-    - pylint src/
-    - black --check src/
-  coverage: '/TOTAL.*\s+(\d+%)$/'
-  artifacts:
-    reports:
-      coverage_report:
-        coverage_format: cobertura
-        path: coverage.xml
-  rules:
-    - changes:
-        - src/**/*
-        - tests/**/*
-        - requirements*.txt
-
-build-package:
-  stage: build
-  image: python:$PYTHON_VERSION
-  script:
-    - pip install -r requirements.txt -t package/
-    - cp -r src/* package/
-    - cd package && zip -r ../lambda-package.zip .
-  artifacts:
-    paths:
-      - lambda-package.zip
-    expire_in: 1 hour
-  rules:
-    - changes:
-        - src/**/*
-        - requirements.txt
-
-security-scan:
-  stage: security-scan
-  image: python:$PYTHON_VERSION
-  script:
-    - pip install safety bandit
-    - safety check -r requirements.txt
-    - bandit -r src/
-  dependencies:
-    - build-package
-
-deploy-lambda-dev:
-  stage: deploy-dev
-  image: amazon/aws-cli:latest
-  script:
-    - aws lambda update-function-code --function-name idp-classification-dev --zip-file fileb://lambda-package.zip
-    - aws lambda update-function-code --function-name idp-extraction-dev --zip-file fileb://lambda-package.zip
-    - aws lambda update-function-code --function-name idp-evaluation-dev --zip-file fileb://lambda-package.zip
-    - aws lambda wait function-updated --function-name idp-classification-dev
-  environment:
-    name: dev
-  dependencies:
-    - build-package
-    - security-scan
-
-integration-tests:
-  stage: integration-test
-  image: python:$PYTHON_VERSION
-  script:
-    - pip install -r requirements-test.txt
-    - pytest tests/integration/ --env=dev
-  dependencies:
-    - deploy-lambda-dev
-  artifacts:
-    reports:
-      junit: tests/integration/results.xml
-```
-
-### 3. Prompt+Config Pipeline
-
-**Purpose**: Manage BDA blueprints, prompts, and system configuration
-
-**Trigger Conditions**:
-- Changes to `config/` directory
-- Changes to `prompts/` directory
-- Changes to `blueprints/` directory
-- Manual pipeline execution
-
-**Pipeline Stages**:
-
-```yaml
-# .gitlab-ci.yml (Prompt+Config)
-stages:
-  - validate
-  - test-synthetic
-  - deploy-dev
-  - evaluate-quality
-  - deploy-staging
-  - deploy-prod
-
-validate-config:
-  stage: validate
-  image: python:3.11
-  script:
-    - pip install jsonschema pydantic
-    - python scripts/validate_config.py config/
-    - python scripts/validate_prompts.py prompts/
-  rules:
-    - changes:
-        - config/**/*
-        - prompts/**/*
-        - blueprints/**/*
-
-test-synthetic-documents:
-  stage: test-synthetic
-  image: python:3.11
-  script:
-    - pip install -r requirements-test.txt
-    - python scripts/synthetic_test.py --config config/dev.json
-  artifacts:
-    paths:
-      - test-results/synthetic-evaluation.json
-    expire_in: 1 week
-  rules:
-    - changes:
-        - config/**/*
-        - prompts/**/*
-
-deploy-config-dev:
-  stage: deploy-dev
-  image: amazon/aws-cli:latest
-  script:
-    - aws s3 sync config/ s3://idp-config-dev/config/ --delete
-    - aws s3 sync prompts/ s3://idp-config-dev/prompts/ --delete
-    - aws s3 sync blueprints/ s3://idp-config-dev/blueprints/ --delete
-    - aws lambda invoke --function-name idp-config-reload-dev response.json
-  environment:
-    name: dev
-  dependencies:
-    - validate-config
-
-evaluate-quality:
-  stage: evaluate-quality
-  image: python:3.11
-  script:
-    - pip install -r requirements-test.txt
-    - python scripts/quality_evaluation.py --env dev --threshold 0.85
-  dependencies:
-    - deploy-config-dev
-  artifacts:
-    reports:
-      junit: quality-results.xml
-```### Pip
-eline Security and Best Practices
-
-#### Security Controls
-
-1. **Secret Management**:
-   - AWS credentials stored in GitLab CI/CD variables
-   - Secrets Manager integration for runtime secrets
-   - No hardcoded credentials in code or configuration
-
-2. **Access Control**:
-   - Pipeline execution requires appropriate GitLab permissions
-   - Production deployments require manual approval
-   - Separate service accounts for each environment
-
-3. **Security Scanning**:
-   - Terraform security scanning with Checkov and tfsec
-   - Container vulnerability scanning with Trivy
-   - Dependency vulnerability scanning with Safety
-
-#### Deployment Strategy
-
-1. **Environment Promotion**:
-   - Dev → Staging → Production progression
-   - Automated deployment to dev environment
-   - Manual approval gates for staging and production
-
-2. **Rollback Strategy**:
-   - Infrastructure: Terraform state rollback
-   - Application: Lambda version rollback
-   - Configuration: S3 object versioning rollback
-
-3. **Blue-Green Deployment**:
-   - Lambda aliases for traffic shifting
-   - API Gateway stage variables for endpoint switching
-   - Gradual traffic migration with monitoring
-
-### Pipeline Monitoring and Observability
-
-#### Pipeline Metrics
-
-1. **Build Metrics**:
-   - Build success/failure rates
-   - Build duration trends
-   - Test coverage metrics
-
-2. **Deployment Metrics**:
-   - Deployment frequency
-   - Lead time for changes
-   - Mean time to recovery
-
-3. **Quality Metrics**:
-   - Security scan results
-   - Code quality scores
-   - Test execution results
-
-#### Alerting Configuration
-
-```yaml
-# GitLab CI/CD Alert Rules
-pipeline_alerts:
-  - name: "Pipeline Failure"
-    condition: "pipeline.status == 'failed'"
-    channels: ["slack", "email"]
-    severity: "high"
-  
-  - name: "Security Scan Failure"
-    condition: "job.name contains 'security' AND job.status == 'failed'"
-    channels: ["security-team", "email"]
-    severity: "critical"
-  
-  - name: "Production Deployment"
-    condition: "environment == 'production' AND job.status == 'success'"
-    channels: ["ops-team", "slack"]
-    severity: "info"
-```
-
-## Testing Strategy
-
-### 1. Unit Testing
-
-**Scope**: Individual Lambda functions and utility modules
-
-**Framework**: pytest with mocking for AWS services
-
-**Coverage Requirements**: Minimum 80% code coverage
-
-**Test Categories**:
-- Function input/output validation
-- Error handling scenarios
-- Configuration parsing logic
-- Data transformation functions
-
-### 2. Integration Testing
-
-**Scope**: End-to-end workflow testing with AWS services
-
-**Test Environment**: Dedicated dev environment with synthetic data
-
-**Test Scenarios**:
-- Document upload and BDA processing workflow
-- Configuration change propagation to BDA blueprints
-- Error handling and retry mechanisms
-- Performance under load with BDA API calls
-
-### 3. Synthetic Data Testing
-
-**Purpose**: Validate processing accuracy with controlled test data
-
-**Test Data Generation**:
-- Programmatically generated documents for each type
-- Multiple languages and layouts
-- Edge cases and boundary conditions
-
-**Validation Criteria**:
-- Classification accuracy ≥ 95%
-- Field extraction accuracy ≥ 90%
-- Processing time ≤ 30 seconds per document
-
-### 4. LLM Evaluation Testing
-
-**Purpose**: Automated quality assessment using LLM-based evaluation
-
-**Evaluation Process**:
-1. Process synthetic documents through pipeline
-2. Compare results against ground truth using LLM evaluator
-3. Generate quality scores and detailed reports
-4. Flag discrepancies for manual review
-
-**Quality Thresholds**:
-- Overall quality score ≥ 0.85
-- Classification accuracy ≥ 0.95
-- Field-level precision ≥ 0.90
-- Field-level recall ≥ 0.85
-
-### 5. Performance Testing
-
-**Load Testing**:
-- Concurrent document processing: 100 documents/minute
-- Peak load handling: 500 documents/minute for 10 minutes
-- Memory usage monitoring for Lambda functions
-
-**Stress Testing**:
-- Large document processing (up to 10MB)
-- Complex document layouts
-- Multiple language processing
-
-## Security Considerations
-
-### Data Protection
-
-1. **Encryption**:
-   - S3 buckets encrypted with KMS keys
-   - DynamoDB encryption at rest
-   - Lambda environment variables encrypted
-
-2. **Access Control**:
-   - IAM roles with least privilege principle
-   - Resource-based policies for cross-service access
-   - VPC endpoints for private service communication
-
-3. **Data Lifecycle**:
-   - Automatic document deletion after processing
-   - Log retention policies (1 year for AWS, 30 days for application)
-   - No PII data in logs or metrics
-
-### Network Security
-
-1. **Serverless Security**:
-   - Lambda functions in AWS-managed secure environment
-   - No custom VPC required for this use case
-   - Service-to-service communication via AWS backbone
-
-2. **API Security**:
-   - API Gateway with API keys and rate limiting
-   - HTTPS enforcement for all endpoints
-   - CORS configuration for web clients
-   - AWS WAF for additional protection (optional)
-
-3. **Service Integration Security**:
-   - IAM roles for service-to-service authentication
-   - Resource-based policies for fine-grained access
-   - AWS PrivateLink for on-premises connectivity (if needed)
-
-This comprehensive Low Level Design provides the foundation for implementing a robust, scalable, and secure Intelligent Document Processing system with proper CI/CD practices using GitLab pipelines.
-
-#### 2. IAM Roles Module (`modules/iam-roles/`)
-
-**Lambda Execution Roles**:
-```hcl
-# Document Validator Lambda Role
-resource "aws_iam_role" "document_validator_role" {
-  name = "idp-document-validator-role-${var.environment}"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy" "document_validator_policy" {
-  name = "idp-document-validator-policy"
-  role = aws_iam_role.document_validator_role.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:GetObjectMetadata"
-        ]
-        Resource = "${aws_s3_bucket.idp_input_documents.arn}/*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "dynamodb:GetItem",
-          "dynamodb:PutItem",
-          "dynamodb:UpdateItem"
-        ]
-        Resource = aws_dynamodb_table.document_metadata.arn
-      }
-    ]
-  })
-}
-
-# BDA Processor Lambda Role
-resource "aws_iam_role" "bda_processor_role" {
-  name = "idp-bda-processor-role-${var.environment}"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy" "bda_processor_policy" {
-  name = "idp-bda-processor-policy"
-  role = aws_iam_role.bda_processor_role.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "bedrock:InvokeModel",
-          "bedrock:InvokeModelWithResponseStream"
-        ]
-        Resource = "arn:aws:bedrock:*:*:foundation-model/*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "bedrock-agent:*"
-        ]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject"
-        ]
-        Resource = [
-          "${aws_s3_bucket.idp_input_documents.arn}/*",
-          "${aws_s3_bucket.idp_configuration.arn}/*"
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "dynamodb:GetItem",
-          "dynamodb:PutItem",
-          "dynamodb:UpdateItem"
-        ]
-        Resource = aws_dynamodb_table.document_metadata.arn
-      }
-    ]
-  })
-}
-
-# Step Functions Execution Role
-resource "aws_iam_role" "step_functions_role" {
-  name = "idp-step-functions-role-${var.environment}"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "states.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy" "step_functions_policy" {
-  name = "idp-step-functions-policy"
-  role = aws_iam_role.step_functions_role.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "lambda:InvokeFunction"
-        ]
-        Resource = [
-          aws_lambda_function.document_validator.arn,
-          aws_lambda_function.bda_processor.arn,
-          aws_lambda_function.quality_evaluator.arn,
-          aws_lambda_function.output_generator.arn,
-          aws_lambda_function.cleanup_handler.arn,
-          aws_lambda_function.notification_handler.arn,
-          aws_lambda_function.error_handler.arn
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "sqs:SendMessage"
-        ]
-        Resource = [
-          aws_sqs_queue.manual_review_queue.arn,
-          aws_sqs_queue.dead_letter_queue.arn
-        ]
-      }
-    ]
-  })
-}
-```
-
-#### 3. Lambda Functions Module (`modules/lambda-functions/`)
-
-**Lambda Function Definitions**:
-```hcl
-# Document Validator Lambda
-resource "aws_lambda_function" "document_validator" {
-  filename         = "lambda-packages/document-validator.zip"
-  function_name    = "idp-document-validator-${var.environment}"
-  role            = aws_iam_role.document_validator_role.arn
-  handler         = "validator.handler"
-  runtime         = "python3.11"
-  timeout         = 60
-  memory_size     = 256
-  
-  environment {
-    variables = {
-      ENVIRONMENT = var.environment
-      DYNAMODB_TABLE = aws_dynamodb_table.document_metadata.name
-      MAX_FILE_SIZE_MB = "10"
-      SUPPORTED_FORMATS = "pdf,jpg,jpeg,tiff"
-    }
-  }
-}
-
-# BDA Processor Lambda
-resource "aws_lambda_function" "bda_processor" {
-  filename         = "lambda-packages/bda-processor.zip"
-  function_name    = "idp-bda-processor-${var.environment}"
-  role            = aws_iam_role.bda_processor_role.arn
-  handler         = "bda_processor.handler"
-  runtime         = "python3.11"
-  timeout         = 300
-  memory_size     = 1024
-  
-  environment {
-    variables = {
-      ENVIRONMENT = var.environment
-      CONFIG_BUCKET = aws_s3_bucket.idp_configuration.bucket
-      DYNAMODB_TABLE = aws_dynamodb_table.document_metadata.name
-      BDA_REGION = var.aws_region
-    }
-  }
-}
-
-# Quality Evaluator Lambda
-resource "aws_lambda_function" "quality_evaluator" {
-  filename         = "lambda-packages/quality-evaluator.zip"
-  function_name    = "idp-quality-evaluator-${var.environment}"
-  role            = aws_iam_role.quality_evaluator_role.arn
-  handler         = "evaluator.handler"
-  runtime         = "python3.11"
-  timeout         = 180
-  memory_size     = 512
-  
-  environment {
-    variables = {
-      ENVIRONMENT = var.environment
-      EVALUATION_MODEL = "anthropic.claude-3-haiku-20240307-v1:0"
-      QUALITY_THRESHOLD = "0.85"
-    }
-  }
-}
-```
-
-#### 4. Step Functions Module (`modules/step-functions/`)
-
-**Step Functions State Machine**:
-```hcl
-resource "aws_sfn_state_machine" "idp_workflow" {
-  name     = "idp-document-processing-${var.environment}"
-  role_arn = aws_iam_role.step_functions_role.arn
-  
-  definition = templatefile("${path.module}/state-machine.json", {
-    document_validator_arn = aws_lambda_function.document_validator.arn
-    bda_processor_arn = aws_lambda_function.bda_processor.arn
-    quality_evaluator_arn = aws_lambda_function.quality_evaluator.arn
-    output_generator_arn = aws_lambda_function.output_generator.arn
-    cleanup_handler_arn = aws_lambda_function.cleanup_handler.arn
-    notification_handler_arn = aws_lambda_function.notification_handler.arn
-    error_handler_arn = aws_lambda_function.error_handler.arn
-    manual_review_queue_url = aws_sqs_queue.manual_review_queue.url
-  })
-  
-  logging_configuration {
-    log_destination        = "${aws_cloudwatch_log_group.step_functions_logs.arn}:*"
-    include_execution_data = true
-    level                 = "ALL"
-  }
-}
-
-# EventBridge Target for Step Functions
-resource "aws_cloudwatch_event_target" "step_functions_target" {
-  rule      = aws_cloudwatch_event_rule.s3_document_upload.name
-  target_id = "StepFunctionsTarget"
-  arn       = aws_sfn_state_machine.idp_workflow.arn
-  role_arn  = aws_iam_role.eventbridge_role.arn
-  
-  input_transformer {
-    input_paths = {
-      bucket = "$.detail.bucket.name"
-      key    = "$.detail.object.key"
-    }
-    input_template = jsonencode({
-      document_id = "<key>"
-      s3_bucket   = "<bucket>"
-      s3_key      = "<key>"
-    })
-  }
-}
-```
-
-## Application Components Flow
-
-### 1. Document Upload Flow
-
-```mermaid
-sequenceDiagram
-    participant Client as Client Application
-    participant API as API Gateway
-    participant Lambda as Upload Lambda
-    participant S3 as S3 Input Bucket
-    participant DDB as DynamoDB
-    participant EB as EventBridge
-    participant SF as Step Functions
-    
-    Client->>API: POST /upload (metadata)
-    API->>Lambda: Invoke upload handler
-    Lambda->>DDB: Store document metadata
-    Lambda->>S3: Generate pre-signed URL
-    Lambda->>API: Return pre-signed URL
-    API->>Client: Return upload URL
-    Client->>S3: Upload document using pre-signed URL
-    S3->>EB: Trigger Object Created event
-    EB->>SF: Start workflow execution
-```
-
-### 2. BDA Processing Flow
-
-```mermaid
-sequenceDiagram
-    participant SF as Step Functions
-    participant Validator as Document Validator
-    participant BDA as BDA Processor
-    participant Bedrock as AWS Bedrock
-    participant Config as Config S3
-    participant DDB as DynamoDB
-    
-    SF->>Validator: Validate document
-    Validator->>S3: Check file format/size
-    Validator->>DDB: Update status: validating
-    Validator->>SF: Return validation result
-    SF->>BDA: Process with BDA
-    BDA->>Config: Load configuration/blueprints
-    BDA->>Bedrock: Call BDA API
-    Bedrock->>BDA: Return processing results
-    BDA->>DDB: Update processing results
-    BDA->>SF: Return BDA results
-```
-
-### 3. Quality Evaluation and Output Flow
-
-```mermaid
-sequenceDiagram
-    participant SF as Step Functions
-    participant QE as Quality Evaluator
-    participant OG as Output Generator
-    participant CH as Cleanup Handler
-    participant NH as Notification Handler
-    participant S3Out as S3 Output
-    participant Client as Client Application
-    
-    SF->>QE: Evaluate quality
-    QE->>Bedrock: LLM evaluation call
-    QE->>SF: Return quality scores
-    SF->>OG: Generate output
-    OG->>S3Out: Store final JSON
-    OG->>SF: Output generated
-    SF->>CH: Cleanup resources
-    CH->>S3: Delete input document
-    CH->>SF: Cleanup complete
-    SF->>NH: Send notification
-    NH->>Client: Callback notification
-```
-
-## Service Integration Details
-
-### BDA Integration Architecture
-
-**BDA Blueprint Structure**:
-```json
-{
-  "blueprint_name": "idp-document-processor",
-  "version": "1.0",
-  "document_types": {
-    "national_id": {
-      "classification_prompt": "Analyze this document and determine if it's a National ID card...",
-      "extraction_schema": {
-        "full_name": {"type": "string", "required": true},
-        "document_number": {"type": "string", "required": true},
-        "expiry_date": {"type": "date", "required": true}
-      },
-      "confidence_threshold": 0.85
-    }
-  },
-  "models": {
-    "classification": "anthropic.claude-3-sonnet-20240229-v1:0",
-    "extraction": "anthropic.claude-3-sonnet-20240229-v1:0",
-    "evaluation": "anthropic.claude-3-haiku-20240307-v1:0"
-  }
-}
-```
-
-**BDA API Call Flow**:
-1. **Input Preparation**: Document uploaded to S3, metadata in DynamoDB
-2. **Configuration Loading**: Load blueprint from S3 configuration bucket
-3. **BDA Invocation**: Single API call with document reference and blueprint
-4. **Result Processing**: Parse classification, extraction, and confidence scores
-5. **Quality Check**: Validate results against thresholds
-6. **Output Generation**: Format results for downstream consumption
-
-This comprehensive design provides the complete infrastructure and application flow for the IDP system, showing how Step Functions orchestrates all components and how BDA handles the core document processing functionality.
-
-## Infrastructure Components Breakdown
-
-### AWS Services and Components
-
-**Core Storage and Compute**:
-- **S3 Buckets**: Input documents, output results, configuration storage
-- **DynamoDB**: Document metadata and processing status tracking
-- **Lambda Functions**: Serverless processing components (7 functions)
-- **Step Functions**: Workflow orchestration and state management
-
-**Integration and Messaging**:
-- **API Gateway**: Secure document upload endpoints with rate limiting
-- **EventBridge**: Event-driven triggers for document processing
-- **SQS Queues**: Manual review queue and dead letter queue for failed processing
-
-**Security and Monitoring**:
-- **IAM Roles**: Least privilege access for each component
-- **Secrets Manager**: Secure credential and API key storage
-- **CloudWatch**: Logging, monitoring, and alerting
-- **New Relic**: Advanced observability and performance monitoring
-
-**AI and Processing**:
-- **Bedrock Data Automation**: Core document processing engine
-- **Bedrock Models**: Claude, Haiku, and other LLMs for evaluation
-
-## GitLab CI/CD Pipeline Architecture
-
-### Pipeline Architecture Overview
-
-The CI/CD strategy implements three separate pipelines to enable independent deployment cycles and reduce blast radius of changes:
-
-1. **Infrastructure Pipeline** - Manages AWS resources using Terraform
-2. **Application Pipeline** - Handles Lambda functions and application code  
-3. **Prompt+Config Pipeline** - Manages BDA blueprints and configuration
-
-### 1. Infrastructure Pipeline
-
-```mermaid
-graph TB
-    subgraph "Infrastructure Pipeline"
-        A[Code Changes in /infrastructure] --> B[Terraform Validate]
-        B --> C[Terraform Plan]
-        C --> D[Security Scan - Checkov/tfsec]
-        D --> E{Manual Approval}
-        E -->|Approved| F[Deploy to Dev]
-        F --> G[Deploy to Staging]
-        G --> H[Deploy to Production]
-        E -->|Rejected| I[Pipeline Stopped]
-    end
-    
-    subgraph "Components Deployed"
-        J[S3 Buckets]
-        K[DynamoDB Tables]
-        L[IAM Roles & Policies]
-        M[Lambda Infrastructure]
-        N[Step Functions]
-        O[API Gateway]
-        P[EventBridge Rules]
-        Q[CloudWatch Resources]
-    end
-    
-    F --> J
-    F --> K
-    F --> L
-    F --> M
-    F --> N
-    F --> O
-    F --> P
-    F --> Q
-```
-
-**Purpose**: Deploy and manage AWS infrastructure using Terraform
-
-**Trigger Conditions**:
-- Changes to `infrastructure/` directory
-- Changes to `*.tf` files
-- Manual pipeline execution
-- Scheduled weekly validation runs
-
-**Infrastructure Components Managed**:
-- API Gateway with security policies and rate limiting
-- Lambda functions with appropriate IAM roles
-- S3 buckets with versioning and encryption
-- DynamoDB tables with backup configuration
-- IAM roles and policies with least privilege
-- EventBridge rules and targets
-- Step Functions state machines
-- CloudWatch log groups and alarms
-- New Relic integration resources
-- Secrets Manager for secure credential storage
-
-### 2. Application Pipeline
-
-```mermaid
-graph TB
-    subgraph "Application Pipeline"
-        A[Code Changes in /src] --> B[Unit Tests]
-        B --> C[Code Quality Checks]
-        C --> D[Build ZIP Packages]
-        D --> E[Security Scan - Safety/Bandit]
-        E --> F[Deploy to Dev]
-        F --> G[Integration Tests]
-        G --> H{Quality Gates}
-        H -->|Pass| I[Deploy to Staging]
-        I --> J[Deploy to Production]
-        H -->|Fail| K[Pipeline Stopped]
-    end
-    
-    subgraph "Lambda Functions Deployed"
-        L[Document Validator]
-        M[BDA Processor]
-        N[Quality Evaluator]
-        O[Output Generator]
-        P[Cleanup Handler]
-        Q[Notification Handler]
-        R[Error Handler]
-    end
-    
-    F --> L
-    F --> M
-    F --> N
-    F --> O
-    F --> P
-    F --> Q
-    F --> R
-```
-
-**Purpose**: Build, test, and deploy Lambda function code using ZIP packages
-
-**Trigger Conditions**:
-- Changes to `src/` directory
-- Changes to `requirements.txt` or `package.json`
-- Manual pipeline execution
-
-**Application Components**:
-- **Document Validator**: Validates file format, size, and accessibility
-- **BDA Processor**: Handles Bedrock Data Automation API calls
-- **Quality Evaluator**: LLM-based quality assessment
-- **Output Generator**: Creates structured JSON output
-- **Cleanup Handler**: Manages document lifecycle and cleanup
-- **Notification Handler**: Sends completion/error notifications
-- **Error Handler**: Processes and logs error conditions
-
-### 3. Prompt+Config Pipeline
-
-```mermaid
-graph TB
-    subgraph "Prompt+Config Pipeline"
-        A[Changes in /config or /prompts] --> B[Validate Configuration]
-        B --> C[Validate Prompts & Blueprints]
-        C --> D[Synthetic Document Testing]
-        D --> E[Deploy Config to Dev]
-        E --> F[Quality Evaluation Tests]
-        F --> G{Quality Threshold Met}
-        G -->|≥85% Accuracy| H[Deploy to Staging]
-        H --> I[Deploy to Production]
-        G -->|<85% Accuracy| J[Pipeline Stopped]
-    end
-    
-    subgraph "Configuration Components"
-        K[BDA Blueprints]
-        L[Document Type Schemas]
-        M[Confidence Thresholds]
-        N[LLM Model Selection]
-        O[Processing Parameters]
-        P[Evaluation Prompts]
-    end
-    
-    E --> K
-    E --> L
-    E --> M
-    E --> N
-    E --> O
-    E --> P
-```
-
-**Purpose**: Manage BDA blueprints, prompts, and system configuration
-
-**Trigger Conditions**:
-- Changes to `config/` directory
-- Changes to `prompts/` directory
-- Changes to `blueprints/` directory
-- Manual pipeline execution
-
-**Configuration Management**:
-- **BDA Blueprints**: Document processing templates and schemas
-- **Document Type Schemas**: Field definitions for each document type
-- **Confidence Thresholds**: Quality gates per document type
-- **LLM Model Selection**: AI model configuration for different tasks
-- **Processing Parameters**: Timeout, retry, and performance settings
-- **Evaluation Prompts**: Templates for quality assessment
-
-## Application Components Flow
-
-### 1. Document Upload Flow
-
-```mermaid
-sequenceDiagram
-    participant Client as Client Application
-    participant API as API Gateway
-    participant Lambda as Upload Lambda
-    participant S3 as S3 Input Bucket
-    participant DDB as DynamoDB
-    participant EB as EventBridge
-    participant SF as Step Functions
-    
-    Client->>API: POST /upload (metadata)
-    API->>Lambda: Invoke upload handler
-    Lambda->>DDB: Store document metadata
-    Lambda->>S3: Generate pre-signed URL
-    Lambda->>API: Return pre-signed URL
-    API->>Client: Return upload URL
-    Client->>S3: Upload document using pre-signed URL
-    S3->>EB: Trigger Object Created event
-    EB->>SF: Start workflow execution
-```
-
-### 2. BDA Processing Flow
-
-```mermaid
-sequenceDiagram
-    participant SF as Step Functions
-    participant Validator as Document Validator
-    participant BDA as BDA Processor
-    participant Bedrock as AWS Bedrock
-    participant Config as Config S3
-    participant DDB as DynamoDB
-    
-    SF->>Validator: Validate document
-    Validator->>S3: Check file format/size
-    Validator->>DDB: Update status: validating
-    Validator->>SF: Return validation result
-    SF->>BDA: Process with BDA
-    BDA->>Config: Load configuration/blueprints
-    BDA->>Bedrock: Call BDA API
-    Bedrock->>BDA: Return processing results
-    BDA->>DDB: Update processing results
-    BDA->>SF: Return BDA results
-```
-
-### 3. Quality Evaluation and Output Flow
-
-```mermaid
-sequenceDiagram
-    participant SF as Step Functions
-    participant QE as Quality Evaluator
-    participant OG as Output Generator
-    participant CH as Cleanup Handler
-    participant NH as Notification Handler
-    participant S3Out as S3 Output
-    participant Client as Client Application
-    
-    SF->>QE: Evaluate quality
-    QE->>Bedrock: LLM evaluation call
-    QE->>SF: Return quality scores
-    SF->>OG: Generate output
-    OG->>S3Out: Store final JSON
-    OG->>SF: Output generated
-    SF->>CH: Cleanup resources
-    CH->>S3: Delete input document
-    CH->>SF: Cleanup complete
-    SF->>NH: Send notification
-    NH->>Client: Callback notification
-```
-
-## Service Integration Details
-
-### BDA Integration Architecture
-
-**BDA Blueprint Structure**:
-- **Document Types**: National ID, Driver's License, Passport, Utility Bills, Bank Statements, Legal Claims
-- **Processing Models**: Claude Sonnet for classification/extraction, Haiku for evaluation
-- **Configuration Management**: Dynamic blueprint loading from S3
-- **Quality Thresholds**: Configurable confidence scores per document type
-
-**BDA API Call Flow**:
-1. **Input Preparation**: Document uploaded to S3, metadata in DynamoDB
-2. **Configuration Loading**: Load blueprint from S3 configuration bucket
-3. **BDA Invocation**: Single API call with document reference and blueprint
-4. **Result Processing**: Parse classification, extraction, and confidence scores
-5. **Quality Check**: Validate results against thresholds
-6. **Output Generation**: Format results for downstream consumption
-
-This comprehensive design provides the complete infrastructure and application flow for the IDP system, showing how Step Functions orchestrates all components and how BDA handles the core document processing functionality.
+This comprehensive Low Level Design provides a business-focused overview of the IDP system architecture, emphasizing business benefits, system capabilities, and operational characteristics suitable for stakeholder review and approval.
